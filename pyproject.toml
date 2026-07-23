@@ -1,0 +1,118 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project]
+name = "qwen-transkrib"
+version = "0.1.0"
+description = "Multilingual audio transcription with speaker diarization (Qwen3-ASR / GigaAM v3 + pyannote, MetaX GPU optimized)"
+readme = "README.md"
+requires-python = "==3.12.*"
+license = { text = "Apache-2.0" }
+keywords = ["asr", "diarization", "qwen3-asr", "pyannote", "speech", "metax", "maca"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "datasets>=3.4",
+    "jiwer>=3",
+    "pyarrow>=15",  # bench: read HF parquet datasets
+    "qwen-asr==0.0.6",
+    "transformers==4.57.6",
+    "accelerate==1.12.0",
+    "qwen-omni-utils",
+    "torch>=2.10.0",  # Will resolve from MetaX index
+    "torchaudio>=2.4",  # Will use local stub via [tool.uv.sources]
+    "flash-attn>=2.6",  # Required for memory-efficient attention
+    "soundfile>=0.12",
+    "numpy>=1.26,<3",
+    "numba>=0.59",  # Python 3.12 support; overrides stale pin from qwen-omni-utils → librosa
+    "pyannote-audio>=4.0,<5",
+    "huggingface-hub>=0.28",
+    "typer>=0.12",
+    "rich>=13",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "pyyaml>=6",
+    "python-dotenv>=1.0",
+    "pandas>=2.1",
+    "sbert-punc-case-ru @ git+https://huggingface.co/kontur-ai/sbert_punc_case_ru",
+    "silero-vad>=5.1",
+    # GigaAM HF model dependencies (trust_remote_code=True)
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "sentencepiece>=0.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "ruff>=0.5"]
+dev = ["mypy>=1.10"]
+gigaam = ["gigaam @ git+https://github.com/salute-developers/GigaAM.git"]
+
+[project.scripts]
+qwen-transkrib = "qwen_transkrib.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/user/qwen-transkrib"
+Repository = "https://github.com/user/qwen-transkrib"
+Issues = "https://github.com/user/qwen-transkrib/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qwen_transkrib"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"]  # typer.Option/Argument in defaults is idiomatic
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning:audioop",
+    "ignore::DeprecationWarning:sunau",
+    "ignore::DeprecationWarning:audioread",
+    "ignore::UserWarning:pyannote",
+    "ignore::UserWarning:torch.nn.functional",
+    "ignore:message.*degrees of freedom.*",
+    "ignore:message.*TensorFloat-32.*",
+    "ignore:message.*generation flags.*",
+    "ignore:message.*pad_token_id.*",
+]
+log_cli_level = "WARNING"
+log_cli = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.22",
+]
+
+# MetaX PyPI repository for MACA-optimized torch/torchaudio/triton
+# explicit = true ensures this index is ONLY used for packages in [tool.uv.sources]
+[[tool.uv.index]]
+name = "metax"
+url = "https://repos.metax-tech.com/r/maca-pypi/simple"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "metax" }]
+triton = [{ index = "metax" }]
+torchaudio = { path = "packages/torchaudio-stub", editable = true }
+flash-attn = [{ index = "metax" }]

@@ -1,0 +1,14 @@
+services:
+  asr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./data/in:/data/in
+      - ./data/out:/data/out
+      - hf-cache:/data/models
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+
+volumes:
+  hf-cache:

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "torchaudio"
+version = "2.11.0a1"
+# NOTE: Version set to 2.11.0a1 to satisfy pyannote-audio's torchaudio>=2.8.0 requirement.
+# Actual functionality is provided by soundfile backend, not real torchaudio.
+description = "Torchaudio stub for MetaX GPU (pure-Python soundfile backend)"
+requires-python = "==3.12.*"
+dependencies = [
+    "soundfile>=0.12",
+    "torch>=2.10",
+    "numpy>=1.26",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/torchaudio"]

@@ -1,0 +1,18 @@
+This product includes software developed by the following teams:
+
+== Qwen3-ASR ==
+Copyright 2026 Alibaba Cloud
+Licensed under the Apache License, Version 2.0
+Source: https://github.com/QwenLM/Qwen3-ASR
+Models: Qwen/Qwen3-ASR-1.7B, Qwen/Qwen3-ForcedAligner-0.6B
+
+== pyannote-audio ==
+Copyright (c) CNRS
+Licensed under the MIT License
+Source: https://github.com/pyannote/pyannote-audio
+Model: pyannote/speaker-diarization-community-1
+
+== MetaX MACA SDK ==
+Copyright MetaX Technologies
+Source: https://developer.metax-tech.com
+GPU acceleration for torch operations on MetaX C500/C550/C650
