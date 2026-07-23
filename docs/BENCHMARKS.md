@@ -1,43 +1,43 @@
 # Benchmarks
 
-## Performance Metrics
+Measured on MetaX C500 (32 GB VRAM).
+
+## Speed
 
 RT factor = audio duration / processing time. Higher is faster.
 
-### ASR (Qwen3-ASR-1.7B)
+### GigaAM v3 (e2e_ctc)
 
-| GPU | RT Factor | Memory | Notes |
-|-----|-----------|--------|-------|
-| MetaX C500 | 5.5x | ~4 GB | BF16, flash-attn |
-| MetaX C550 | 6.0x | ~4 GB | BF16, flash-attn |
-| NVIDIA A100 80GB | 6.5x | ~4 GB | BF16, flash-attn |
-| NVIDIA RTX 4090 | 4.5x | ~4 GB | BF16, flash-attn |
-| CPU (Intel Xeon) | 0.1x | ~4 GB | BF16, no acceleration |
+| Audio Length | Time | RT Factor | Notes |
+|--------------|------|-----------|-------|
+| 5 sec | 0.64s | 7.8x | Single chunk |
+| 30 sec | 1.03s | 29x | Single chunk |
+| 18 min | 51.6s | 21x | VAD + 76 chunks |
+
+### Qwen3-ASR-1.7B
+
+| Audio Length | Time | RT Factor | Notes |
+|--------------|------|-----------|-------|
+| 30 sec | ~5s | 6x | Single chunk |
+| 18 min | ~3.3 min | 5.5x | VAD + forced aligner |
 
 ### Diarization (pyannote community-1)
 
-| GPU | RT Factor | Memory | Notes |
-|-----|-----------|--------|-------|
-| MetaX C500 | 13x | ~2 GB | Full pipeline |
-| NVIDIA A100 80GB | 15x | ~2 GB | Full pipeline |
-| CPU (Intel Xeon) | 1.5x | ~2 GB | Slow but works |
-
-### End-to-End Pipeline
-
-| GPU | 18-min audio | 30-sec audio | Notes |
-|-----|--------------|--------------|-------|
-| MetaX C500 | ~3.3 min | ~5 sec | Full pipeline |
-| NVIDIA A100 80GB | ~2.8 min | ~4 sec | Full pipeline |
-| CPU (Intel Xeon) | ~30 min | ~50 sec | Not recommended |
+| Audio Length | Time | RT Factor |
+|--------------|------|-----------|
+| 30 sec | ~2s | 15x |
+| 18 min | ~50s | 13x |
 
 ## Accuracy
 
-### Word Error Rate (WER)
+### Word Error Rate (WER) — Golos Crowd test set
 
-| Model | Languages | Avg WER |
-|-------|-----------|---------|
-| Qwen3-ASR-1.7B | 30 languages | 4.90% |
-| Qwen3-ASR-0.6B | 30 languages | 7.57% |
+| Backend | WER | Sub | Ins | Del | Ref Words | Samples |
+|---------|:---:|:---:|:---:|:---:|:---------:|:-------:|
+| **GigaAM-v3** | **13.78%** | 27 | 0 | 8 | 254 | 50 |
+| Qwen3-ASR-1.7B | 16.14% | 32 | 2 | 7 | 254 | 50 |
+
+Official GigaAM WER on full Golos Crowd test set: **2.76%** (source: [ai-sage/GigaAM](https://huggingface.co/ai-sage/GigaAM)).
 
 ### Speaker Diarization
 
@@ -47,26 +47,35 @@ RT factor = audio duration / processing time. Higher is faster.
 | Overlap accuracy | 85%+ | When speakers overlap |
 | Minimum segment | 0.5s | Shorter segments may be missed |
 
-### Alignment Accuracy
-
-| Metric | Qwen3-ForcedAligner | wav2vec2 (whisperX) |
-|--------|---------------------|---------------------|
-| Average Accuracy Score | 40-43 ms | 200 ms |
-| Russian support | Yes | Limited |
-
 ## Memory Usage
 
 | Component | VRAM | RAM |
 |-----------|------|-----|
+| GigaAM-v3 | ~1.5 GB | ~0.5 GB |
 | Qwen3-ASR-1.7B | ~3.5 GB | ~1 GB |
 | Qwen3-ForcedAligner-0.6B | ~1.2 GB | ~0.5 GB |
 | pyannote community-1 | ~2 GB | ~1 GB |
-| **Total (full pipeline)** | **~7 GB** | **~3 GB** |
+| Punctuation model | ~0.5 GB | ~0.3 GB |
+| **Total (GigaAM pipeline)** | **~4 GB** | **~2 GB** |
+| **Total (Qwen3 pipeline)** | **~7 GB** | **~3 GB** |
 
 ## Recommendations
 
-- **Minimum GPU**: 8 GB VRAM (tight, may OOM on long audio)
+- **Minimum GPU**: 8 GB VRAM (GigaAM works, Qwen3 tight)
 - **Recommended GPU**: 16 GB VRAM (comfortable for full pipeline)
 - **Minimum RAM**: 16 GB
 - **Recommended RAM**: 32 GB
-- **Disk for models**: ~10 GB (3 models × ~3 GB each)
+- **Disk for models**: ~10 GB
+
+## How to Benchmark
+
+```bash
+# Quick test (50 samples)
+uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
+
+# Full test (all samples)
+uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd --backend gigaam
+
+# Custom dataset
+uv run qwen-transkrib bench my-org/my-dataset --split validation -n 100
+```
