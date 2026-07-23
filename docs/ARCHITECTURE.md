@@ -2,99 +2,120 @@
 
 ## Data Flow
 
+```mermaid
+flowchart TD
+    Audio[Audio File] --> VAD[Silero VAD]
+    VAD --> |speech segments| ASR{ASR Backend}
+
+    ASR --> |Qwen3-ASR| Qwen3[Qwen3-ASR-1.7B<br/>+ ForcedAligner-0.6B]
+    ASR --> |GigaAM v3| GigaAM[GigaAM-v3<br/>e2e_ctc]
+
+    Qwen3 --> Words[Words + Timestamps]
+    GigaAM --> Words
+
+    Words --> Punct[Punctuation Model]
+    Punct --> |Russian| PunctRU[kontur-ai/sbert_punc_case_ru]
+    Punct --> |English| PunctEN[fullstop-punctuation-multilingual]
+    PunctRU --> Text[Punctuated Text]
+    PunctEN --> Text
+
+    Audio --> Diar[pyannote community-1]
+    Diar --> Turns[Speaker Turns]
+
+    Text --> Merge[assign_speakers]
+    Turns --> Merge
+    Merge --> Segments[Segments with Speakers]
+
+    Segments --> Output{Output}
+    Output --> SRT[SRT]
+    Output --> VTT[VTT]
+    Output --> JSON[JSON]
+    Output --> TXT[TXT]
 ```
-                    ┌─────────────┐
-                    │  Audio File  │
-                    │  (wav/mp3)   │
-                    └──────┬──────┘
-                           │
-              ┌────────────┴────────────┐
-              │                         │
-              ▼                         ▼
-    ┌─────────────────┐     ┌─────────────────┐
-    │   Qwen3-ASR     │     │    pyannote      │
-    │   (1.7B)        │     │  community-1     │
-    │                 │     │                  │
-    │  Input: audio   │     │  Input: waveform │
-    │  Output: words  │     │  Output: turns   │
-    │  + timestamps   │     │  (start/end/     │
-    │                 │     │   speaker)       │
-    └────────┬────────┘     └────────┬─────────┘
-             │                       │
-             │  ┌────────────────────┘
-             │  │
-             ▼  ▼
-    ┌─────────────────────┐
-    │ Punctuation Model   │
-    │                     │
-    │ Russian: rubert     │
-    │ English: multilingual│
-    │                     │
-    │ Restores: . ? ! ,   │
-    │ + Capitalization    │
-    └──────────┬──────────┘
-               │
-               ▼
-    ┌─────────────────────┐
-    │  assign_speakers()  │
-    │                     │
-    │  Interval-overlap   │
-    │  algorithm          │
-    │                     │
-    │  Input: words +     │
-    │         turns       │
-    │  Output: segments   │
-    │  with speaker labels│
-    └──────────┬──────────┘
-               │
-    ┌──────────┴──────────┐
-    │                     │
-    ▼         ▼         ▼         ▼
-  ┌─────┐  ┌─────┐  ┌─────┐  ┌─────┐
-  │ SRT │  │ VTT │  │ JSON│  │ TXT │
-  └─────┘  └─────┘  └─────┘  └─────┘
-```
+
+## Backends
+
+| Backend | Model | Params | WER (Golos) | Punctuation | Timestamps |
+|---------|-------|--------|-------------|-------------|------------|
+| **Qwen3-ASR** | Qwen/Qwen3-ASR-1.7B | 1.7B | 57.48% | External model | Forced aligner |
+| **GigaAM v3** | ai-sage/GigaAM-v3 (e2e_ctc) | 240M | 2.76% | Built-in | CTC decoding |
+
+GigaAM uses HuggingFace transformers with a patched `load_audio` (soundfile instead of ffmpeg). No native gigaam package required.
 
 ## Modules
 
 ### `asr.py`
 ASR backends with a common `ASRBackend` interface:
-- `Qwen3Backend`: Wraps `Qwen3ASRModel` for multilingual speech recognition with word-level timestamps via forced aligner.
-- `GigaAMBackend`: Russian-focused CTC model (240M params). Uses HuggingFace transformers with patched `load_audio` (soundfile instead of ffmpeg). Includes built-in punctuation.
+- **`Qwen3Backend`**: Wraps `Qwen3ASRModel`. Word timestamps via `Qwen3-ForcedAligner-0.6B`. Supports hotword context for term correction.
+- **`GigaAMBackend`**: Russian CTC model. Patches `load_audio` to use soundfile (avoids ffmpeg subprocess). Handles long audio via chunking with overlap.
+
+### `vad.py`
+Voice Activity Detection using Silero VAD v5. Splits audio at natural pause boundaries. Configurable `min_silence_ms` and `max_segment_sec`.
 
 ### `bench.py`
-WER benchmarking against HuggingFace datasets. Reads parquet directly (bypasses torchcodec). Supports both backends via `--backend` flag.
+WER benchmarking against HuggingFace datasets. Reads parquet directly via pyarrow (bypasses torchcodec). Strips punctuation for fair comparison.
 
 ### `punctuate.py`
-Restores punctuation and capitalization to raw ASR output. Language-specific models:
-- Russian: `kontur-ai/sbert_punc_case_ru`
+Restores punctuation and capitalization. Language-specific models:
+- Russian: `kontur-ai/sbert_punc_case_ru` (sbert_large_nlu_ru, no tokenizer bugs)
 - English: `oliverguhr/fullstop-punctuation-multilingual-base`
 
 ### `diarize.py`
-Wraps `pyannote.audio.Pipeline` for speaker diarization. Loads audio via `soundfile` (avoids torchcodec issues on MetaX). Returns DataFrame with speaker turns.
+Wraps `pyannote.audio.Pipeline`. Loads audio via soundfile (avoids torchcodec). Returns speaker turns with timestamps.
 
 ### `merge.py`
-Pure Python implementation of interval-overlap speaker assignment (ported from whisperX). For each word, finds the diarization turn with maximum temporal overlap. Groups consecutive same-speaker words into Segments.
+Interval-overlap speaker assignment (ported from whisperX). For each word, finds the diarization turn with maximum temporal overlap. Groups consecutive same-speaker words into Segments.
+
+### `correct.py`
+Experimental LLM post-processing (Qwen3-0.6B). Fixes ASR errors but slow on CPU. Disabled by default (`--correct` flag).
 
 ### `writers/`
-Output format writers. Each takes a `TranscriptionResult` and writes to a file. Supported formats: SRT, VTT, JSON, TXT.
+Output format writers (SRT, VTT, JSON, TXT). Each takes a `TranscriptionResult`.
 
 ### `cli.py`
-Typer-based CLI with two commands:
-- `transcribe`: Full pipeline (ASR → punctuation → diarize → merge → output)
+Typer-based CLI with three commands:
+- `transcribe`: Full pipeline (VAD → ASR → punctuation → diarize → merge → output)
+- `bench`: WER benchmarking
 - `info`: Environment diagnostics
 
 ### `schemas.py`
-Pydantic models for type-safe data flow between modules.
+Pydantic models: `Word`, `Segment`, `TranscriptionResult`.
 
 ### `config.py`
-Settings loaded from environment variables with `QWEN_` prefix.
+Settings from environment variables with `QWEN_` prefix.
+
+## MetaX GPU Support
+
+```mermaid
+flowchart LR
+    subgraph Patches
+        T[transformers<br/>cache_utils.py] --> |fix empty tensor| MetaX
+        P[pyannote<br/>wespeaker] --> |fix torch.vmap| MetaX
+        I[pyannote<br/>io.py] --> |suppress torchcodec warning| MetaX
+    end
+
+    subgraph Packages
+        TS[torchaudio-stub<br/>packages/torchaudio-stub] --> |MelSpectrogram<br/>load/save| MetaX
+    end
+```
+
+### `apply_patches.sh`
+Applies MetaX-specific patches:
+1. `transformers` cache_utils.py — fixes empty tensor initialization
+2. `pyannote` wespeaker — fixes torch.vmap storage issue
+3. `pyannote` io.py — suppresses torchcodec warning
+
+### `packages/torchaudio-stub`
+Minimal torchaudio replacement for MetaX:
+- `load`/`save` via soundfile (no ffmpeg)
+- `MelSpectrogram` transform (required by GigaAM)
+- Stub implementations for other transforms
 
 ## Key Design Decisions
 
-1. **No vLLM**: vLLM is broken on MetaX for long audio. Transformers backend is reliable.
-2. **No whisperX import**: Copy the interval-overlap algorithm, don't import the package (its ASR backend doesn't work on MetaX).
-3. **pyannote community-1 only**: Version 3.1 gives garbage output on MetaX stub-fbank stack.
-4. **soundfile for audio loading**: Avoids torchcodec dependency issues on MetaX.
-5. **Model caching**: Avoids reloading 1.7B+ models on repeated CLI calls.
-6. **Language-specific punctuation**: Different models for different languages (Russian vs English).
+1. **Dual ASR backends**: GigaAM for Russian (fast, accurate), Qwen3 for multilingual.
+2. **No vLLM**: Broken on MetaX for long audio. Transformers backend is reliable.
+3. **pyannote community-1 only**: Version 3.1 gives garbage output on MetaX.
+4. **soundfile everywhere**: Avoids torchcodec/ffmpeg dependency issues on MetaX.
+5. **VAD-first chunking**: Splits audio at natural pauses before ASR. Improves accuracy for long audio.
+6. **Model caching**: Avoids reloading 1.7B+ models on repeated CLI calls.
