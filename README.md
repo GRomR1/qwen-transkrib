@@ -13,29 +13,6 @@ uv sync
 uv run qwen-transkrib transcribe audio.wav --context "Google, Microsoft, Amazon"
 ```
 
-## Architecture
-
-```
-Audio File
-    │
-    ├──► Silero VAD ──► Speech segments (split at pauses)
-    │
-    ├──► Qwen3-ASR-1.7B ──► Words with timestamps (per chunk)
-    │
-    ├──► Punctuation Model ──► Restored punctuation & capitalization
-    │   (Russian: kontur-ai/sbert_punc_case_ru)
-    │   (English: fullstop-punctuation-multilingual)
-    │
-    ├──► pyannote community-1 ──► Speaker turns (start, end, speaker)
-    │
-    └──► assign_speakers() ──► Segments with speaker labels
-                                    │
-                                    ├──► SRT
-                                    ├──► VTT
-                                    ├──► JSON
-                                    └──► TXT
-```
-
 ## Requirements
 
 - Python 3.12
@@ -63,10 +40,7 @@ pip install .
 ### Docker
 
 ```bash
-# Build
 docker build -t qwen-transkrib .
-
-# Run
 docker run --gpus all -v $(pwd)/data:/data qwen-transkrib transcribe /data/audio.wav
 
 # Or use Docker Compose
@@ -94,14 +68,9 @@ uv run qwen-transkrib transcribe input.webm \
   --format srt,json,txt \
   --context "Google, Microsoft, Amazon" \
   --device cuda:0 \
+  --backend gigaam \
   --punct \
   --vad
-
-# Without VAD (process entire file at once)
-uv run qwen-transkrib transcribe audio.wav --no-vad
-
-# Without punctuation restoration
-uv run qwen-transkrib transcribe audio.wav --no-punct
 
 # Benchmark WER against reference dataset
 uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
@@ -121,33 +90,6 @@ words, text, lang = transcribe_file(Path("audio.wav"), settings, context="Google
 diar = diarize_file(Path("audio.wav"), settings)
 segments = assign_speakers(words, diar)
 ```
-
-## Benchmarking
-
-The `bench` command measures ASR accuracy (WER) against reference datasets from HuggingFace.
-
-```bash
-# Benchmark GigaAM on Golos Crowd (Russian)
-uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
-
-# Benchmark Qwen3-ASR (default)
-uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50
-
-# Custom dataset and split
-uv run qwen-transkrib bench my-org/my-dataset --split validation -n 100
-```
-
-Output:
-```
-WER:      13.78%
-Sub:      27
-Ins:      0
-Del:      8
-Ref words: 254
-Samples:  50
-```
-
-**Note:** Benchmark strips punctuation for fair comparison across models. WER varies by sample count — official GigaAM WER on full Golos Crowd test set is 2.76%.
 
 ## Supported Languages
 
@@ -178,28 +120,6 @@ Create `.env` in project root:
 HF_TOKEN=your_token_here
 ```
 
-## MetaX GPU Support
-
-For MetaX C500/C550/C650 GPUs, apply the required patches:
-
-```bash
-./apply_patches.sh
-```
-
-This patches:
-1. `transformers` cache_utils.py - fixes empty tensor initialization
-2. `pyannote` wespeaker - fixes torch.vmap storage issue
-3. `pyannote` io.py - suppresses noisy torchcodec warning (falls back to torchaudio)
-
-### torchaudio-stub
-
-The `packages/torchaudio-stub` provides a minimal torchaudio replacement that works with MetaX GPUs. It includes:
-- `load`/`save` via soundfile (no ffmpeg dependency)
-- `MelSpectrogram` transform (required by GigaAM)
-- Stub implementations for other transforms
-
-This avoids the MetaX torchaudio compatibility issues (mel spectrogram channel mismatch, missing transforms).
-
 ## Output Formats
 
 - **SRT** - SubRip subtitles (for video players)
@@ -207,57 +127,11 @@ This avoids the MetaX torchaudio compatibility issues (mel spectrogram channel m
 - **JSON** - Full transcription with word-level timestamps
 - **TXT** - Plain text
 
-## Troubleshooting
+## Documentation
 
-### Warnings in logs
-
-The following warnings are harmless and can be ignored:
-
-- **`SyntaxWarning: invalid escape sequence`** (from nagisa) — third-party library issue, suppressed automatically
-- **`UserWarning: torchcodec is not installed correctly`** — expected on MetaX GPUs; pyannote falls back to built-in audio decoding
-
-### Punctuation not working
-
-Punctuation is **enabled by default**. If your output lacks punctuation:
-
-1. Check that you're not using `--no-punct`
-2. Ensure the punctuation model downloaded successfully on first run
-3. Try running with `--punct` explicitly
-
-### Diarization fails with `HF_TOKEN not set`
-
-Set your HuggingFace token:
-```bash
-export HF_TOKEN=your_token_here
-```
-Or create a `.env` file with `HF_TOKEN=your_token_here`.
-
-### GigaAM backend
-
-GigaAM v3 (CTC revision) is supported as an alternative ASR backend for Russian. Uses HuggingFace transformers for text transcription (no native gigaam package required for basic use). Includes built-in punctuation and capitalization.
-
-Benchmarked WER on Golos Crowd:
-
-| Backend | WER | Sub | Ins | Del | Size |
-|---------|:---:|:---:|:---:|:---:|:----:|
-| **GigaAM-v3** (CTC) | **2.76%** | 6 | 0 | 1 | 240M params |
-| Qwen3-ASR-1.7B | 57.48% | 138 | 2 | 6 | 1.7B params |
-
-```bash
-# Transcribe with GigaAM
-uv run qwen-transkrib transcribe audio.wav --backend gigaam
-
-# With VAD for long audio
-uv run qwen-transkrib transcribe long_audio.wav --backend gigaam --vad
-
-# Benchmark GigaAM WER
-uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
-
-# Benchmark Qwen3-ASR WER
-uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50
-```
-
-**Note:** For word-level timestamps, install the native gigaam package: `uv sync --extra gigaam`.
+- [Architecture](docs/ARCHITECTURE.md) — data flow, modules, design decisions
+- [Benchmarks](docs/BENCHMARKS.md) — WER, RT factor, memory usage
+- [Troubleshooting](docs/TROUBLESHOOTING.md) — common issues and fixes
 
 ## Development
 

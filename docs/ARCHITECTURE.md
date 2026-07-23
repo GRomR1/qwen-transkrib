@@ -58,11 +58,16 @@
 ## Modules
 
 ### `asr.py`
-Wraps `Qwen3ASRModel` for speech recognition with word-level timestamps. Uses the transformers backend (not vLLM). Caches models in memory for repeated calls.
+ASR backends with a common `ASRBackend` interface:
+- `Qwen3Backend`: Wraps `Qwen3ASRModel` for multilingual speech recognition with word-level timestamps via forced aligner.
+- `GigaAMBackend`: Russian-focused CTC model (240M params). Uses HuggingFace transformers with patched `load_audio` (soundfile instead of ffmpeg). Includes built-in punctuation.
+
+### `bench.py`
+WER benchmarking against HuggingFace datasets. Reads parquet directly (bypasses torchcodec). Supports both backends via `--backend` flag.
 
 ### `punctuate.py`
 Restores punctuation and capitalization to raw ASR output. Language-specific models:
-- Russian: `markusiko/rubert-base-punctuation`
+- Russian: `kontur-ai/sbert_punc_case_ru`
 - English: `oliverguhr/fullstop-punctuation-multilingual-base`
 
 ### `diarize.py`
