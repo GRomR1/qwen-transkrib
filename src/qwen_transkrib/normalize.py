@@ -90,7 +90,7 @@ _alt = "|".join(re.escape(w) for w in _ALL_NUM_WORDS)
 
 # Multi-word number patterns: 2-4 consecutive number words
 _RE_MULTI_WORD = re.compile(
-    rf"\b(?:{_alt})\b(?:\s+\b(?:{_alt})\b){{1,3}}",
+    rf"\b(?:{_alt})\b(?:\s+\b(?:{_alt})\b)+",
     re.IGNORECASE,
 )
 
