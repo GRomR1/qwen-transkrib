@@ -6,7 +6,7 @@ Measured on MetaX C500 (32 GB VRAM).
 
 RT factor = audio duration / processing time. Higher is faster.
 
-### GigaAM v3 (e2e_ctc)
+### GigaAM v3 (e2e_rnnt)
 
 | Audio Length | Time | RT Factor | Notes |
 |--------------|------|-----------|-------|
@@ -30,11 +30,24 @@ RT factor = audio duration / processing time. Higher is faster.
 
 ## Accuracy
 
-### Word Error Rate (WER) — Golos Crowd test set
+### Word Error Rate (WER) — Podlodka Speech test set (long audio)
+
+Primary benchmark dataset. 20 samples, 8-60 seconds each, Russian podcast audio.
 
 | Backend | WER | Sub | Ins | Del | Ref Words | Samples |
 |---------|:---:|:---:|:---:|:---:|:---------:|:-------:|
-| **GigaAM-v3** | **13.78%** | 27 | 0 | 8 | 254 | 50 |
+| **GigaAM-v3 (e2e_rnnt) + native** | **7.74%** | 53 | 24 | 11 | 1137 | 20 |
+| GigaAM-v3 (e2e_rnnt) + HF | 8.09% | 45 | 38 | 9 | 1137 | 20 |
+| Qwen3-ASR-1.7B | 12.40% | 105 | 24 | 12 | 1137 | 20 |
+
+Note: Native gigaam requires patch (see `patches/apply_gigaam_patch.py`). Official GigaAM WER on full Golos Crowd test set: **2.76%**.
+
+### Word Error Rate (WER) — Golos Crowd test set (short commands)
+
+| Backend | WER | Sub | Ins | Del | Ref Words | Samples |
+|---------|:---:|:---:|:---:|:---:|:---------:|:-------:|
+| **GigaAM-v3 (e2e_rnnt)** | **13.15%** | 49 | 1 | 16 | 502 | 100 |
+| GigaAM-v3 (e2e_rnnt, 50 samples) | **12.99%** | 24 | 0 | 9 | 254 | 50 |
 | Qwen3-ASR-1.7B | 16.14% | 32 | 2 | 7 | 254 | 50 |
 
 Official GigaAM WER on full Golos Crowd test set: **2.76%** (source: [ai-sage/GigaAM](https://huggingface.co/ai-sage/GigaAM)).
@@ -70,11 +83,14 @@ Official GigaAM WER on full Golos Crowd test set: **2.76%** (source: [ai-sage/Gi
 ## How to Benchmark
 
 ```bash
-# Quick test (50 samples)
-uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
+# Primary benchmark (Podlodka Speech - long audio)
+uv run qwen-transkrib bench bond005/podlodka_speech -n 20 --backend gigaam
 
-# Full test (all samples)
-uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd --backend gigaam
+# Full benchmark (all 20 samples)
+uv run qwen-transkrib bench bond005/podlodka_speech --backend gigaam
+
+# Legacy benchmark (Golos Crowd - short commands)
+uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
 
 # Custom dataset
 uv run qwen-transkrib bench my-org/my-dataset --split validation -n 100

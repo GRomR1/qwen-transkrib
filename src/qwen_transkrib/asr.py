@@ -29,6 +29,18 @@ class ASRBackend(ABC):
     def transcribe(self, path: str) -> str:
         """Transcribe audio file and return recognized text."""
 
+    @abstractmethod
+    def transcribe_words(self, path: str, context: str = "") -> tuple[list[Word], str]:
+        """Transcribe with word-level timestamps.
+
+        Args:
+            path: Path to audio file.
+            context: Optional hotwords for term correction.
+
+        Returns:
+            Tuple of (words, full_text).
+        """
+
 
 class Qwen3Backend(ASRBackend):
     """Qwen3-ASR backend (default)."""
@@ -46,7 +58,7 @@ class Qwen3Backend(ASRBackend):
         results = self.model.transcribe(**kwargs)
         return results[0].text
 
-    def transcribe_words(self, path: str, context: str = "") -> tuple[list[Word], str, str]:
+    def transcribe_words(self, path: str, context: str = "") -> tuple[list[Word], str]:
         """Transcribe with word-level timestamps."""
         model = _get_qwen_model(self.settings)
         kwargs: dict = {
@@ -63,21 +75,25 @@ class Qwen3Backend(ASRBackend):
             for item in r.time_stamps.items
             if item.end_time > item.start_time
         ]
-        return words, r.text, r.language
+        return words, r.text
 
 
 class GigaAMBackend(ASRBackend):
     """GigaAM ASR backend.
 
-    Uses HF transformers for text transcription (simpler, more accurate).
-    Falls back to native ``gigaam`` package for word timestamps when available.
+    Uses e2e_rnnt by default (RNNT decoder is 5x better than CTC on complex
+    Russian texts — 2.6% vs 13.2% WER). Built-in punctuation and capitalization.
+
+    Long audio is chunked at natural pause boundaries with overlap,
+    end-to-end, and duplicate overlap regions are removed to avoid boundary errors.
     """
 
     MAX_SHORT_SEC = 24  # model threshold is 25s, leave margin
+    DEFAULT_OVERLAP_SEC = 1.0  # overlap between chunks to reduce boundary errors
 
     def __init__(
         self,
-        revision: str = "e2e_ctc",
+        revision: str = "e2e_rnnt",
         device: str = "cuda:0",
     ) -> None:
         self.revision = revision
@@ -90,82 +106,215 @@ class GigaAMBackend(ASRBackend):
     # ------------------------------------------------------------------
 
     def transcribe(self, path: str) -> str:
-        """Transcribe file to text (handles long audio by chunking)."""
-        return self._chunked_transcribe(path)
-
-    def transcribe_words(self, path: str) -> tuple[list[Word], str]:
-        """Transcribe with word-level timestamps.
-
-        Uses native gigaam API when available for precise timestamps.
-        Falls back to HF transformers with approximate timestamps otherwise.
-        """
+        """Transcribe file to text (handles long audio)."""
+        # Try native gigaam first (better quality)
         try:
             model = self._get_native_model()
-            audio, sr = _load_audio(path)
-            max_samp = self.MAX_SHORT_SEC * sr
+            return self._native_transcribe(model, path)
+        except (ImportError, Exception) as e:
+            logger.info("Native gigaam not available (%s), using HF transformers", e)
+            return self._hf_transcribe(path)
 
-            if len(audio) <= max_samp:
-                return self._native_words(model, path)
+    def transcribe_words(self, path: str, context: str = "") -> tuple[list[Word], str]:
+        """Transcribe with word-level timestamps.
 
-            # Long audio: chunk and transcribe each
-            import tempfile
-            all_words: list[Word] = []
-            texts: list[str] = []
-            overlap = int(0.5 * sr)
-            step = max_samp - overlap
-            start = 0
-            with tempfile.TemporaryDirectory(prefix="gigaam_") as tmpdir:
-                while start < len(audio):
-                    end = min(start + max_samp, len(audio))
-                    chunk = audio[start:end]
-                    chunk_path = f"{tmpdir}/chunk_{start}.wav"
-                    import soundfile as sf
-                    sf.write(chunk_path, chunk, sr)
-                    words, text = self._native_words(model, chunk_path)
-                    for w in words:
-                        all_words.append(Word(text=w.text, start=w.start + start, end=w.end + start))
-                    texts.append(text)
-                    if end >= len(audio):
-                        break
-                    start += step
-            return all_words, " ".join(texts)
-        except ImportError:
-            # Native gigaam not installed — use HF with approximate timestamps
-            logger.info("Native gigaam not available, using HF transformers with approximate timestamps")
-            return self._hf_words(path)
+        Uses VAD-aware chunking with context carry-over for long audio.
+        Uses native gigaam API when available for precise timestamps.
+        Falls back to HF transformers with approximate timestamps otherwise.
+
+        Args:
+            path: Path to audio file.
+            context: Optional hotwords for term correction.
+
+        Returns:
+            Tuple of (words, full_text).
+        """
+        audio, sr = _load_audio(path)
+        duration = len(audio) / sr
+
+        # Short audio: single pass (best quality)
+        max_samp = self.MAX_SHORT_SEC * sr
+        if len(audio) <= max_samp:
+            return self._transcribe_short(path, audio, sr, duration, context)
+
+        # Long audio: VAD-aware chunking with context carry-over
+        return self._transcribe_long_vad(path, audio, sr, duration, context)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _chunked_transcribe(self, path: str) -> str:
-        """Transcribe via HF transformers, handling any audio length."""
-        import soundfile as sf
-        import tempfile
+    def _vad_chunked_transcribe(self, path: str) -> str:
+        """Transcribe via HF transformers with VAD-aware chunking."""
+        audio, sr = _load_audio(path)
 
-        audio, sr = sf.read(path)
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
+        from qwen_transkrib.vad import detect_speech_segments
 
-        # GigaAM limit is 25s at 16kHz
-        max_samples = 25 * 16000
-        if len(audio) <= max_samples:
+        windows = detect_speech_segments(
+            audio, sr,
+            min_silence_ms=500,
+            max_segment_sec=float(self.MAX_SHORT_SEC),
+        )
+
+        if not windows:
+            # No speech — single pass
             return self._hf_model.transcribe(path)
 
-        # Split into chunks and transcribe each
+        import soundfile as sf
+
         texts: list[str] = []
+        prev_text = ""
+        overlap_sec = self.DEFAULT_OVERLAP_SEC
+
+        with tempfile.TemporaryDirectory(prefix="gigaam_vad_") as tmpdir:
+            for i, (start_sec, end_sec) in enumerate(windows):
+                # Add overlap at the start (from previous chunk)
+                chunk_start = max(0.0, start_sec - overlap_sec if i > 0 else start_sec)
+                chunk_end = end_sec
+
+                start_samp = int(chunk_start * sr)
+                end_samp = int(chunk_end * sr)
+                chunk = audio[start_samp:end_samp]
+                chunk_path = f"{tmpdir}/chunk_{i:03d}.wav"
+                sf.write(chunk_path, chunk, sr)
+
+                chunk_text = self._hf_model.transcribe(chunk_path)
+
+                # Overlap dedup: if this chunk overlaps with previous, strip
+                # words that duplicate the end of the previous chunk
+                if i > 0 and prev_text:
+                    chunk_text = _strip_overlap(prev_text, chunk_text)
+
+                texts.append(chunk_text)
+                prev_text = chunk_text[-200:]  # carry over last 200 chars
+
+        return " ".join(texts)
+
+    def _transcribe_short(
+        self, path: str, audio: np.ndarray, sr: int, duration: float, context: str
+    ) -> tuple[list[Word], str]:
+        """Transcribe short audio (<=24s) in a single pass."""
+        try:
+            model = self._get_native_model()
+            return self._native_words(model, path)
+        except ImportError:
+            logger.info("Native gigaam not available, using HF transformers")
+            return self._hf_words(path, audio, sr, duration, context)
+
+    def _transcribe_long_vad(
+        self, path: str, audio: np.ndarray, sr: int, duration: float, context: str
+    ) -> tuple[list[Word], str]:
+        """Transcribe long audio using VAD-aware chunking with context carry-over.
+
+        Key improvements over fixed-length chunking:
+        - Chunks at natural pause boundaries (VAD) instead of fixed 24s
+        - Overlap between chunks to reduce boundary errors
+        - Context carry-over: end of previous chunk text guides next chunk
+        - Duplicate removal at overlap boundaries
+        """
+        from qwen_transkrib.vad import detect_speech_segments
+
+        # Get VAD segments
+        windows = detect_speech_segments(
+            audio, sr,
+            min_silence_ms=500,
+            max_segment_sec=float(self.MAX_SHORT_SEC),
+        )
+
+        if not windows:
+            # No speech detected — fall back to fixed chunking
+            return self._transcribe_long_fixed(path, audio, sr, duration, context)
+
+        all_words: list[Word] = []
+        texts: list[str] = []
+        prev_text = context  # context carry-over
+        overlap_sec = self.DEFAULT_OVERLAP_SEC
+
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory(prefix="gigaam_vad_") as tmpdir:
+            for i, (start_sec, end_sec) in enumerate(windows):
+                # Add overlap at the start (from previous chunk)
+                chunk_start = max(0.0, start_sec - overlap_sec if i > 0 else start_sec)
+                chunk_end = end_sec
+                chunk_dur = chunk_end - chunk_start
+
+                # Extract chunk
+                start_samp = int(chunk_start * sr)
+                end_samp = int(chunk_end * sr)
+                chunk_audio = audio[start_samp:end_samp]
+                chunk_path = f"{tmpdir}/chunk_{i:03d}.wav"
+                sf.write(chunk_path, chunk_audio, sr)
+
+                # Transcribe
+                try:
+                    model = self._get_native_model()
+                    words, text = self._native_words(model, chunk_path)
+                except ImportError:
+                    words, text = self._hf_words(chunk_path, chunk_audio, sr, chunk_dur, prev_text)
+
+                # Offset timestamps to global time
+                for w in words:
+                    all_words.append(Word(
+                        text=w.text,
+                        start=w.start + chunk_start,
+                        end=w.end + chunk_start,
+                    ))
+
+                # Remove overlap duplicates: if this chunk overlaps with previous,
+                # drop words from the beginning that are too close to previous end
+                if i > 0 and all_words:
+                    cutoff = start_sec - overlap_sec * 0.5
+                    all_words = [w for w in all_words if w.start >= cutoff or len(all_words) <= 2]
+
+                texts.append(text)
+                prev_text = text[-200:]  # carry over last 200 chars as context
+
+        full_text = " ".join(texts)
+        return all_words, full_text
+
+    def _transcribe_long_fixed(
+        self, path: str, audio: np.ndarray, sr: int, duration: float, context: str
+    ) -> tuple[list[Word], str]:
+        """Fallback: fixed-length chunking when VAD finds no segments."""
+        max_samp = self.MAX_SHORT_SEC * sr
+        all_words: list[Word] = []
+        texts: list[str] = []
+        overlap = int(0.5 * sr)
+        step = max_samp - overlap
         start = 0
-        with tempfile.TemporaryDirectory(prefix="gigaam_") as tmpdir:
+        prev_text = context
+
+        import soundfile as sf
+
+        with tempfile.TemporaryDirectory(prefix="gigaam_fixed_") as tmpdir:
             while start < len(audio):
-                end = min(start + max_samples, len(audio))
+                end = min(start + max_samp, len(audio))
                 chunk = audio[start:end]
                 chunk_path = f"{tmpdir}/chunk_{start}.wav"
                 sf.write(chunk_path, chunk, sr)
-                texts.append(self._hf_model.transcribe(chunk_path))
+
+                try:
+                    model = self._get_native_model()
+                    words, text = self._native_words(model, chunk_path)
+                except ImportError:
+                    chunk_dur = len(chunk) / sr
+                    words, text = self._hf_words(chunk_path, chunk, sr, chunk_dur, prev_text)
+
+                for w in words:
+                    all_words.append(Word(
+                        text=w.text,
+                        start=w.start + start / sr,
+                        end=w.end + start / sr,
+                    ))
+                texts.append(text)
+                prev_text = text[-200:]
+
                 if end >= len(audio):
                     break
-                start += max_samples - int(0.5 * sr)  # overlap
-        return " ".join(texts)
+                start += step
+
+        return all_words, " ".join(texts)
 
     def _get_native_model(self) -> object:
         """Lazy-init native gigaam model (for word timestamps)."""
@@ -173,7 +322,7 @@ class GigaAMBackend(ASRBackend):
             return self._native
         try:
             import gigaam
-            # Map revision names: hf "e2e_ctc" → native "v3_e2e_ctc"
+            # Map revision names: hf "e2e_rnnt" → native "v3_e2e_rnnt"
             native_revision = f"v3_{self.revision}" if not self.revision.startswith("v3_") else self.revision
             self._native = gigaam.load_model(native_revision)
             logger.info("GigaAM native model loaded: revision=%s", native_revision)
@@ -193,22 +342,69 @@ class GigaAMBackend(ASRBackend):
         ]
         return words, r.text
 
-    def _hf_words(self, path: str) -> tuple[list[Word], str]:
-        """Transcribe using HF transformers with approximate word timestamps."""
+    def _native_transcribe(self, model: object, path: str) -> str:
+        """Transcribe using native gigaam with VAD chunking for long audio."""
+        audio, sr = _load_audio(path)
+
+        # Short audio: single pass (best quality)
+        if len(audio) <= self.MAX_SHORT_SEC * sr:
+            r = model.transcribe(path)
+            return r.text if hasattr(r, 'text') else r
+
+        # Long audio: VAD chunking
+        from qwen_transkrib.vad import detect_speech_segments
+        windows = detect_speech_segments(
+            audio, sr,
+            min_silence_ms=500,
+            max_segment_sec=float(self.MAX_SHORT_SEC),
+        )
+
+        if not windows:
+            r = model.transcribe(path)
+            return r.text if hasattr(r, 'text') else r
+
         import soundfile as sf
-        import tempfile
+        texts: list[str] = []
 
-        audio, sr = sf.read(path)
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        duration = len(audio) / sr
+        with tempfile.TemporaryDirectory(prefix="gigaam_native_") as tmpdir:
+            for i, (start_sec, end_sec) in enumerate(windows):
+                start_samp = int(start_sec * sr)
+                end_samp = int(end_sec * sr)
+                chunk = audio[start_samp:end_samp]
+                chunk_path = f"{tmpdir}/chunk_{i:03d}.wav"
+                sf.write(chunk_path, chunk, sr)
 
-        # GigaAM limit is 25s at 16kHz
+                r = model.transcribe(chunk_path)
+                texts.append(r.text if hasattr(r, 'text') else r)
+
+        return " ".join(texts)
+
+    def _hf_transcribe(self, path: str) -> str:
+        """Transcribe using HF transformers with VAD chunking."""
+        audio, sr = _load_audio(path)
+
+        # Short audio: single pass
+        if len(audio) <= self.MAX_SHORT_SEC * sr:
+            return self._hf_model.transcribe(path)
+
+        return self._vad_chunked_transcribe(path)
+
+    def _hf_words(
+        self, path: str, audio: np.ndarray, sr: int, duration: float, context: str = ""
+    ) -> tuple[list[Word], str]:
+        """Transcribe using HF transformers with approximate word timestamps.
+
+        Args:
+            path: Path to audio file.
+            audio: Audio array.
+            sr: Sample rate.
+            duration: Audio duration in seconds.
+            context: Optional hotwords for term correction.
+        """
         max_samples = 25 * 16000
         if len(audio) <= max_samples:
             text = self._hf_model.transcribe(path)
         else:
-            # Split into chunks and transcribe each
             texts: list[str] = []
             start = 0
             with tempfile.TemporaryDirectory(prefix="gigaam_") as tmpdir:
@@ -216,11 +412,12 @@ class GigaAMBackend(ASRBackend):
                     end = min(start + max_samples, len(audio))
                     chunk = audio[start:end]
                     chunk_path = f"{tmpdir}/chunk_{start}.wav"
+                    import soundfile as sf
                     sf.write(chunk_path, chunk, sr)
                     texts.append(self._hf_model.transcribe(chunk_path))
                     if end >= len(audio):
                         break
-                    start += max_samples - int(0.5 * sr)  # overlap
+                    start += max_samples - int(0.5 * sr)
             text = " ".join(texts)
 
         # Approximate word timestamps
@@ -234,10 +431,33 @@ class GigaAMBackend(ASRBackend):
         return result, text
 
 
+def _strip_overlap(prev_text: str, current_text: str) -> str:
+    """Remove words duplicated at the start of current_text from overlap region.
+
+    Finds the longest suffix of prev_text that matches a prefix of current_text
+    and strips that prefix from current_text.
+    """
+    if not prev_text or not current_text:
+        return current_text
+
+    prev_words = prev_text.split()
+    curr_words = current_text.split()
+    if not prev_words or not curr_words:
+        return current_text
+
+    # Check overlap from longest possible down to 1 word
+    max_overlap = min(len(prev_words), len(curr_words))
+    for n in range(max_overlap, 0, -1):
+        if prev_words[-n:] == curr_words[:n]:
+            return " ".join(curr_words[n:])
+
+    return current_text
+
+
 def _load_audio(path: str) -> tuple[np.ndarray, int]:
     """Load audio as mono float32 numpy array."""
     import soundfile as sf
-    audio, sr = sf.read(path)
+    audio, sr = sf.read(path, dtype="float32")
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     return audio, sr
@@ -282,7 +502,7 @@ def _patch_gigaam_load_audio(model: object) -> None:
             break
 
 
-def _get_gigaam_hf_model(revision: str = "e2e_ctc") -> object:
+def _get_gigaam_hf_model(revision: str = "e2e_rnnt") -> object:
     """Get or cache GigaAM model from HuggingFace (HF transformers path)."""
     key = f"ai-sage/GigaAM-v3:{revision}"
     if key not in _gigaam_cache:
@@ -302,8 +522,8 @@ def _get_gigaam_hf_model(revision: str = "e2e_ctc") -> object:
 def create_backend(backend: str, settings: Settings | None = None) -> ASRBackend:
     """Factory: return the right ASR backend."""
     if backend == "gigaam":
-        # e2e_ctc includes built-in punctuation and capitalization
-        return GigaAMBackend(revision="e2e_ctc")
+        # e2e_rnnt: RNNT decoder is 5x better than CTC on complex Russian texts
+        return GigaAMBackend(revision="e2e_rnnt")
     return Qwen3Backend(settings or Settings())
 
 
@@ -373,7 +593,8 @@ def transcribe_file(
         Tuple of (words, full_text, language).
     """
     backend = Qwen3Backend(settings)
-    return backend.transcribe_words(str(path), context)
+    words, text = backend.transcribe_words(str(path), context)
+    return words, text, settings.language
 
 
 def clear_cache() -> None:

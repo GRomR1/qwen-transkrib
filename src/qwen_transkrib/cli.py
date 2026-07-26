@@ -77,6 +77,19 @@ app = typer.Typer(
 console = Console()
 
 
+def _parse_glossary(raw: str) -> dict[str, str]:
+    """Parse 'src=dst,src2=dst2' glossary string into a dict."""
+    glossary: dict[str, str] = {}
+    if not raw.strip():
+        return glossary
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if "=" in pair:
+            src, dst = pair.split("=", 1)
+            glossary[src.strip()] = dst.strip()
+    return glossary
+
+
 @app.command()
 def transcribe(
     input: Path = typer.Argument(
@@ -91,7 +104,16 @@ def transcribe(
     ),
     correct_flag: bool = typer.Option(
         False, "--correct/--no-correct",
-        help="Experimental: LLM post-processing to fix ASR errors (slow, GPU recommended)"
+        help="Experimental: LLM post-processing to fix ASR errors (slow, GPU recommended)",
+    ),
+    normalize_flag: bool = typer.Option(
+        True, "--normalize/--no-normalize",
+        help="Number normalization (пять → 5) and glossary post-processing",
+    ),
+    glossary: str = typer.Option(
+        "",
+        "--glossary",
+        help="Comma-separated term corrections (e.g. 'гугл=Google,майкрософт=Microsoft')",
     ),
     vad_flag: bool = typer.Option(
         True, "--vad/--no-vad",
@@ -113,7 +135,7 @@ def transcribe(
     ),
     backend: str = typer.Option(
         "asr", "--backend", "-b",
-        help="ASR backend: 'asr' (Qwen3-ASR) or 'gigaam' (e2e_ctc w/ built-in punctuation)",
+        help="ASR backend: 'asr' (Qwen3-ASR) or 'gigaam' (e2e_rnnt w/ built-in punctuation)",
     ),
 ) -> None:
     """Transcribe audio with optional speaker diarization."""
@@ -143,70 +165,23 @@ def transcribe(
         console=console,
     ) as progress:
         if backend == "gigaam":
-            # ---- GigaAM path (e2e_ctc with built-in punctuation) ----
+            # ---- GigaAM path (e2e_rnnt with built-in punctuation) ----
             from qwen_transkrib.asr import create_backend
             asr = create_backend("gigaam")
 
-            if vad_flag:
-                # Use VAD for long audio, then transcribe each chunk
-                from qwen_transkrib.vad import detect_speech_segments, extract_audio_chunks, load_audio
+            task = progress.add_task("Transcribing (GigaAM e2e_rnnt)...", total=None)
+            words, full_text = asr.transcribe_words(str(input))
+            detected_language = language
+            all_words = words
+            progress.update(task, description="Transcription complete")
 
-                task = progress.add_task("Loading audio...", total=None)
-                audio, sr = load_audio(input)
-                duration = len(audio) / sr
-                progress.update(task, description=f"Audio loaded ({duration:.1f}s)")
-
-                task = progress.add_task("VAD segmentation...", total=None)
-                # GigaAM has 25s limit per chunk, use 20s with margin
-                max_chunk = 20.0
-                windows = detect_speech_segments(audio, sr, min_silence_ms=500, max_segment_sec=max_chunk)
-                progress.update(task, description=f"VAD: {len(windows)} chunks")
-
-                if windows:
-                    task = progress.add_task("Transcribing chunks...", total=None)
-                    chunks = extract_audio_chunks(input, windows, str(output_dir / ".chunks"))
-                    all_words: list[Word] = []
-                    full_texts: list[str] = []
-                    detected_language = language
-                    for start_sec, end_sec, chunk_path in chunks:
-                        if diarize_flag:
-                            words, text = asr.transcribe_words(chunk_path)
-                            for w in words:
-                                all_words.append(Word(
-                                    text=w.text, start=w.start + start_sec, end=w.end + start_sec
-                                ))
-                        else:
-                            text = asr.transcribe(chunk_path)
-                            # Approximate word timestamps from chunk duration
-                            chunk_dur = end_sec - start_sec
-                            chunk_words = text.split()
-                            n = len(chunk_words)
-                            for j, w_text in enumerate(chunk_words):
-                                all_words.append(Word(
-                                    text=w_text,
-                                    start=start_sec + j * chunk_dur / n,
-                                    end=start_sec + (j + 1) * chunk_dur / n,
-                                ))
-                        full_texts.append(text)
-                    progress.update(task, description="Transcription complete")
-                    full_text = " ".join(full_texts)
-                else:
-                    all_words = []
-                    full_text = ""
-                    detected_language = language
-            else:
-                task = progress.add_task("Transcribing audio...", total=None)
-                if diarize_flag:
-                    all_words, full_text = asr.transcribe_words(str(input))
-                else:
-                    words_list = asr.transcribe(str(input))
-                    all_words = [Word(text=t, start=0, end=0) for t in words_list.split()]
-                    full_text = words_list
-                detected_language = language
-                progress.update(task, description="Transcription complete")
-
-            # GigaAM e2e_ctc already includes punctuation — skip if user didn't explicitly opt out
+            # GigaAM e2e_rnnt already includes punctuation — skip if user didn't explicitly opt out
             punct_text = full_text
+
+            # Number normalization + glossary (lightweight, 0.5-2pp WER improvement)
+            if normalize_flag:
+                norm = TextNormalizer(glossary=_parse_glossary(glossary))
+                punct_text = norm.normalize(punct_text)
 
             # LLM correction (optional)
             if correct_flag:
@@ -238,6 +213,11 @@ def transcribe(
                 punct_model = _get_punct_model(language)
                 punct_text = punct_model.restore(full_text)
                 progress.update(task, description="Punctuation restored")
+
+            # Number normalization + glossary
+            if normalize_flag:
+                norm = TextNormalizer(glossary=_parse_glossary(glossary))
+                punct_text = norm.normalize(punct_text)
 
             # Step 2.5: LLM error correction
             if correct_flag:
@@ -297,7 +277,7 @@ def transcribe(
             audio_path=str(input.resolve()),
             duration_sec=all_words[-1].end if all_words else 0.0,
             language=detected_language,
-            model=settings.asr_model if backend != "gigaam" else "GigaAM-v3 (e2e_ctc)",
+            model=settings.asr_model if backend != "gigaam" else "GigaAM-v3 (e2e_rnnt)",
             diarization_model=diarization_model if diarize_flag else None,
             speakers=speakers,
             segments=segments,
@@ -398,7 +378,7 @@ def bench(
     if backend == "gigaam":
         asr = create_backend("gigaam")
         console.print(f"Benchmark: [bold]{dataset}[/bold] (split={split})")
-        console.print(f"ASR: GigaAM-v3 (e2e_ctc) | device={device}")
+        console.print(f"ASR: GigaAM-v3 (e2e_rnnt) | device={device}")
     else:
         settings = Settings(
             asr_model=model,

@@ -15,7 +15,7 @@ license = { text = "Apache-2.0" }
 keywords = ["asr", "diarization", "qwen3-asr", "pyannote", "speech", "metax", "maca"]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Environment :: GPU :: NVIDIA CUDA",
+    "Environment :: GPU :: MetaX MACA",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",

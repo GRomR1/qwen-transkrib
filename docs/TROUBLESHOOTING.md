@@ -14,6 +14,15 @@ uv sync
 **Cause**: GigaAM HF model requires hydra, omegaconf, sentencepiece.
 **Solution**: Already included in pyproject.toml. Run `uv sync` to install.
 
+### Native gigaam installation fails on MetaX
+**Cause**: Native gigaam requires `onnxruntime==1.23.*` (NVIDIA CUDA), incompatible with MetaX.
+**Solution**: Install with `--no-deps` and patch for compatibility:
+```bash
+uv pip install --no-deps "gigaam @ git+https://github.com/salute-developers/GigaAM.git"
+uv run python patches/apply_gigaam_patch.py
+```
+The patch sets `strict=False` in the model loading code to handle checkpoint version mismatches.
+
 ## Runtime
 
 ### "pyannote model requires authentication"

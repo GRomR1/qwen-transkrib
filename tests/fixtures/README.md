@@ -1,15 +1,38 @@
 # Test Fixtures
 
-This directory contains test audio files and expected outputs.
+Test audio samples are downloaded from verified HuggingFace datasets on first use.
 
-## ru_30s.wav
+## Verified Datasets
 
-A 30-second Russian audio clip used for smoke tests. Copy from `/home/agent/recording_30s.wav`:
+### bond005/podlodka_speech (Primary)
+
+Russian podcast audio (tech domain). Longer clips for testing VAD chunking.
+
+- **Source**: [bond005/podlodka_speech](https://huggingface.co/datasets/bond005/podlodka_speech)
+- **Durations**: 8-60 seconds per sample
+- **Test split**: 20 samples with transcriptions
+- **Use case**: Long audio, VAD chunking, context carry-over
 
 ```bash
-cp /home/agent/recording_30s.wav tests/fixtures/
+uv run qwen-transkrib bench bond005/podlodka_speech -n 20 --backend gigaam
 ```
 
-## ru_30s.expected.json
+### bond005/sberdevices_golos_10h_crowd
 
-Expected JSON output for the 30-second clip. Used for regression testing.
+Short Russian voice commands. Crowdsourced recordings.
+
+- **Source**: [bond005/sberdevices_golos_10h_crowd](https://huggingface.co/datasets/bond005/sberdevices_golos_10h_crowd)
+- **Durations**: 0.7-27.5 seconds per sample
+- **Test split**: 18.8K samples
+- **Use case**: Short commands, quick smoke tests
+
+```bash
+uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
+```
+
+## Why these datasets?
+
+- Verified transcriptions
+- Publicly available on HuggingFace
+- Cover different audio types (long/short, natural/commands)
+- Used in published benchmarks

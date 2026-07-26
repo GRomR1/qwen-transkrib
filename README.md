@@ -1,6 +1,6 @@
 # qwen-transkrib
 
-Multilingual audio transcription with speaker diarization. Supports **Qwen3-ASR** and **GigaAM v3** (Russian ASR, WER 2.76%) backends. Uses pyannote for speaker identification and language-specific punctuation restoration.
+Multilingual audio transcription with speaker diarization. Supports **Qwen3-ASR** and **GigaAM v3 (e2e_rnnt)** (Russian ASR, WER 2.76%) backends. Uses pyannote for speaker identification and language-specific punctuation restoration.
 
 ## Quickstart
 
@@ -70,9 +70,12 @@ uv run qwen-transkrib transcribe input.webm \
   --device cuda:0 \
   --backend gigaam \
   --punct \
-  --vad
+  --vad \
+  --normalize \
+  --glossary "гугл=Google,майкрософт=Microsoft"
 
 # Benchmark WER against reference dataset
+uv run qwen-transkrib bench bond005/podlodka_speech -n 20 --backend gigaam
 uv run qwen-transkrib bench bond005/sberdevices_golos_10h_crowd -n 50 --backend gigaam
 
 # Show environment info

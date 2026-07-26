@@ -13,7 +13,7 @@ def test_help():
     """CLI shows help text."""
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "Multilingual audio transcription" in result.output
+    assert "Audio transcription with speaker diarization" in result.output
 
 
 def test_transcribe_help():

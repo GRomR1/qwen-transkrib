@@ -78,7 +78,17 @@ def detect_speech_segments(
             cur_start, cur_end = s, e
     windows.append((cur_start, cur_end))
 
-    return windows
+    # Split any windows that exceed max_segment_sec
+    split_windows: list[tuple[float, float]] = []
+    for start, end in windows:
+        while end - start > max_segment_sec:
+            # Find a split point near the middle
+            mid = start + max_segment_sec / 2
+            split_windows.append((start, mid))
+            start = mid
+        split_windows.append((start, end))
+
+    return split_windows
 
 
 def extract_audio_chunks(
