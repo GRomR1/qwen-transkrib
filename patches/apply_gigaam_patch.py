@@ -31,7 +31,7 @@ def patch_gigaam():
         sys.exit(1)
 
     # Read current content
-    content = gigaam_path.read_text()
+    content = gigaam_path.read_text(encoding="utf-8")
 
     # Check if already patched
     if "strict=False" in content:
@@ -48,7 +48,7 @@ def patch_gigaam():
         sys.exit(1)
 
     content = content.replace(old_line, new_line)
-    gigaam_path.write_text(content)
+    gigaam_path.write_text(content, encoding="utf-8")
     print(f"Patched: {gigaam_path}")
     print(f"Changed: {old_line}")
     print(f"      to: {new_line}")

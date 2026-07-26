@@ -8,6 +8,8 @@ import sys
 import warnings
 from pathlib import Path
 
+from qwen_transkrib.normalize import TextNormalizer
+
 # Suppress vllm INFO/DEBUG spam - set env BEFORE any imports
 os.environ["VLLM_LOGGING_LEVEL"] = "WARNING"
 

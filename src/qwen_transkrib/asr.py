@@ -253,6 +253,13 @@ class GigaAMBackend(ASRBackend):
                 except ImportError:
                     words, text = self._hf_words(chunk_path, chunk_audio, sr, chunk_dur, prev_text)
 
+                # Filter overlap duplicates BEFORE adding to global list.
+                # Only drop words from the beginning of this chunk that
+                # duplicate the end of the previous chunk.
+                if i > 0 and words:
+                    cutoff = start_sec - overlap_sec * 0.5
+                    words = [w for w in words if (w.start + chunk_start) >= cutoff or len(words) <= 2]
+
                 # Offset timestamps to global time
                 for w in words:
                     all_words.append(Word(
@@ -260,12 +267,6 @@ class GigaAMBackend(ASRBackend):
                         start=w.start + chunk_start,
                         end=w.end + chunk_start,
                     ))
-
-                # Remove overlap duplicates: if this chunk overlaps with previous,
-                # drop words from the beginning that are too close to previous end
-                if i > 0 and all_words:
-                    cutoff = start_sec - overlap_sec * 0.5
-                    all_words = [w for w in all_words if w.start >= cutoff or len(all_words) <= 2]
 
                 texts.append(text)
                 prev_text = text[-200:]  # carry over last 200 chars as context

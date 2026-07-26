@@ -1,0 +1,112 @@
+{
+  "status": "success",
+  "summary": {
+    "files_reviewed": 11,
+    "comments": 9,
+    "total_tokens": 745730,
+    "input_tokens": 737915,
+    "output_tokens": 7815,
+    "cache_read_tokens": 320447,
+    "elapsed": "1m16s"
+  },
+  "tool_calls": {
+    "total": 58,
+    "by_tool": {
+      "code_comment": 6,
+      "code_search": 15,
+      "file_find": 2,
+      "file_read": 30,
+      "file_read_diff": 5
+    }
+  },
+  "comments": [
+    {
+      "path": "pyproject.toml",
+      "content": "Классификатор `\"Environment :: GPU :: MetaX MACA\"` не входит в официальный список классификаторов PyPI (Trove Classifiers). При попытке публикации пакета на PyPI это вызовет ошибку валидации. Если требуется указать поддержку GPU, лучше использовать стандартный общий классификатор `\"Environment :: GPU\"`.",
+      "suggestion_code": "    \"Environment :: GPU\",",
+      "existing_code": "    \"Environment :: GPU :: MetaX MACA\",",
+      "start_line": 18,
+      "end_line": 18,
+      "category": "maintainability",
+      "severity": "medium"
+    },
+    {
+      "path": "patches/apply_gigaam_patch.py",
+      "content": "Использование `Path.read_text()` без явного указания кодировки может привести к `UnicodeDecodeError` или искажению не-ASCII символов на системах, где кодировка по умолчанию отличается от UTF-8. Рекомендуется явно указать `encoding=\"utf-8\"`.",
+      "suggestion_code": "    # Read current content\n    content = gigaam_path.read_text(encoding=\"utf-8\")",
+      "existing_code": "    # Read current content\n    content = gigaam_path.read_text()",
+      "start_line": 33,
+      "end_line": 34,
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "patches/apply_gigaam_patch.py",
+      "content": "Использование `Path.write_text()` без явного указания кодировки может привести к перезаписи файла в неверной системной кодировке. Рекомендуется явно указать `encoding=\"utf-8\"`.",
+      "suggestion_code": "    content = content.replace(old_line, new_line)\n    gigaam_path.write_text(content, encoding=\"utf-8\")",
+      "existing_code": "    content = content.replace(old_line, new_line)\n    gigaam_path.write_text(content)",
+      "start_line": 50,
+      "end_line": 51,
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "src/qwen_transkrib/normalize.py",
+      "content": "Логическая ошибка при обработке составных числительных с крупными разрядами (тысяча, миллион, миллиард). В текущей реализации значение разряда просто прибавляется к общей сумме (`total += 1000`), из-за чего фразы вроде «пять тысяч» превратятся в «1005» вместо «5000», а «двадцать пять тысяч» — в «1025» вместо «25000». \n\nНеобходимо реализовать корректную обработку множителей (когда значение разряда умножает текущую накопленную сумму), а также учесть склонения этих слов в русском языке (например, «тысяч», «тысячи», «миллионов», «миллиарда»).",
+      "existing_code": "        # Multi-word patterns: \"двадцать пять\", \"сто двадцать три\"\n        def replace_multi(match: re.Match) -\u003e str:\n            parts = match.group(0).lower().split()\n            total = 0\n            for p in parts:\n                if p in _ONES:\n                    total += _ONES[p]\n                elif p in _TENS:\n                    total += _TENS[p]\n                elif p in _NUM_MAP:\n                    total += _NUM_MAP[p]\n            if total \u003e 0:\n                return str(total)\n            return match.group(0)",
+      "start_line": 115,
+      "end_line": 128,
+      "category": "bug",
+      "severity": "high"
+    },
+    {
+      "path": "src/qwen_transkrib/normalize.py",
+      "content": "Регулярное выражение `pattern` компилируется заново при каждом вызове метода `_normalize_numbers`. Так как списки слов статичны, шаблон регулярного выражения можно скомпилировать один раз на уровне модуля или внутри конструктора `TextNormalizer`, чтобы избежать лишней работы процессора на каждый текстовый сегмент.",
+      "existing_code": "        # Try multi-word patterns first (2-3 words)\n        _num_words = list(_TENS.keys()) + list(_ONES.keys()) + list(_NUM_MAP.keys())\n        _alt = \"|\".join(re.escape(w) for w in _num_words)\n        pattern = re.compile(\n            rf\"\\b(?:{_alt})\\b(?:\\s+\\b(?:{_alt})\\b){{1,2}}\",\n            re.IGNORECASE,\n        )\n        text = pattern.sub(replace_multi, text)",
+      "start_line": 130,
+      "end_line": 137,
+      "category": "performance",
+      "severity": "medium"
+    },
+    {
+      "path": "src/qwen_transkrib/normalize.py",
+      "content": "Множественные последовательные вызовы `re.sub` в цикле для каждого слова из `_NUM_MAP` (а также в `_normalize_ordinals` для `_ORD_MAP`) приводят к многократному сканированию одной и той же строки. Для повышения производительности лучше объединить все ключевые слова в один регулярный шаблон с использованием `|` и выполнять замену за один проход `re.sub` с функцией-коллбэком.",
+      "existing_code": "        # Single-word replacements\n        for word, digit in _NUM_MAP.items():\n            text = re.sub(rf\"\\b{re.escape(word)}\\b\", str(digit), text, flags=re.IGNORECASE)",
+      "start_line": 139,
+      "end_line": 141,
+      "category": "performance",
+      "severity": "medium"
+    },
+    {
+      "path": "tests/conftest.py",
+      "content": "Если процесс записи WAV-файла будет прерван (например, при прерывании выполнения тестов пользователем или сбое), на диске останется недозаписанный или поврежденный файл. При повторном запуске тестов условие `cached_file.exists()` вернет `True`, но чтение этого файла завершится ошибкой.\n\nРекомендуется записывать аудио во временный файл в той же директории и затем атомарно переименовывать его в целевой `cached_file`. Это гарантирует, что файл на диске всегда будет валидным.",
+      "suggestion_code": "    cached_file = cache_dir / \"podlodka_speech_sample_0.wav\"\n    if cached_file.exists():\n        return str(cached_file)\n\n    # Download and extract first sample from test set\n    local = hf_hub_download(\n        repo_id=\"bond005/podlodka_speech\",\n        filename=\"data/test-00000-of-00001.parquet\",\n        repo_type=\"dataset\",\n    )\n    table = pq.read_table(local, columns=[\"audio\"])\n\n    audio_struct = table.column(\"audio\")[0].as_py()\n    audio_bytes = audio_struct.get(\"bytes\")\n    if not audio_bytes:\n        pytest.skip(\"Could not extract audio from dataset\")\n\n    # Write to WAV atomically\n    import io\n    data, sr = sf.read(io.BytesIO(audio_bytes))\n    \n    # Write to temporary file first and rename to ensure atomicity\n    temp_file = cache_dir / \"podlodka_speech_sample_0.tmp.wav\"\n    try:\n        sf.write(str(temp_file), data, sr)\n        temp_file.replace(cached_file)\n    finally:\n        if temp_file.exists():\n            temp_file.unlink()",
+      "existing_code": "    cached_file = cache_dir / \"podlodka_speech_sample_0.wav\"\n    if cached_file.exists():\n        return str(cached_file)\n\n    # Download and extract first sample from test set\n    local = hf_hub_download(\n        repo_id=\"bond005/podlodka_speech\",\n        filename=\"data/test-00000-of-00001.parquet\",\n        repo_type=\"dataset\",\n    )\n    table = pq.read_table(local, columns=[\"audio\"])\n\n    audio_struct = table.column(\"audio\")[0].as_py()\n    audio_bytes = audio_struct.get(\"bytes\")\n    if not audio_bytes:\n        pytest.skip(\"Could not extract audio from dataset\")\n\n    # Write to WAV\n    import io\n    data, sr = sf.read(io.BytesIO(audio_bytes))\n    sf.write(str(cached_file), data, sr)",
+      "start_line": 41,
+      "end_line": 61,
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "src/qwen_transkrib/cli.py",
+      "content": "Используется класс `TextNormalizer` для нормализации текста, но соответствующий импорт отсутствует в файле `src/qwen_transkrib/cli.py`. Это приведет к ошибке `NameError` при выполнении команды `transcribe` с включенной нормализацией. Необходимо добавить импорт `from qwen_transkrib.normalize import TextNormalizer` или `from qwen_transkrib import TextNormalizer` в начале файла.",
+      "suggestion_code": "            # Number normalization + glossary (lightweight, 0.5-2pp WER improvement)\n            if normalize_flag:\n                from qwen_transkrib.normalize import TextNormalizer\n                norm = TextNormalizer(glossary=_parse_glossary(glossary))\n                punct_text = norm.normalize(punct_text)",
+      "existing_code": "            # Number normalization + glossary (lightweight, 0.5-2pp WER improvement)\n            if normalize_flag:\n                norm = TextNormalizer(glossary=_parse_glossary(glossary))\n                punct_text = norm.normalize(punct_text)",
+      "start_line": 181,
+      "end_line": 184,
+      "category": "bug",
+      "severity": "critical"
+    },
+    {
+      "path": "src/qwen_transkrib/asr.py",
+      "content": "В методе `_transcribe_long_vad` операция фильтрации перекрывающихся слов применяется ко всему списку `all_words`. Поскольку `cutoff` рассчитывается на основе `start_sec` текущего сегмента и увеличивается с каждой итерацией, эта проверка удалит почти все слова, распознанные в предыдущих чанках. В результате для длинных аудиозаписей будет возвращаться только транскрипция последнего сегмента.\n\nНеобходимо фильтровать слова текущего чанка до добавления их в глобальный список `all_words`.",
+      "suggestion_code": "                # Offset timestamps to global time, ignoring duplicates from overlap region\n                cutoff = start_sec - overlap_sec * 0.5 if i \u003e 0 else 0.0\n                for w in words:\n                    global_start = w.start + chunk_start\n                    if i \u003e 0 and global_start \u003c cutoff and len(words) \u003e 2:\n                        continue\n                    all_words.append(Word(\n                        text=w.text,\n                        start=global_start,\n                        end=w.end + chunk_start,\n                    ))",
+      "existing_code": "                # Offset timestamps to global time\n                for w in words:\n                    all_words.append(Word(\n                        text=w.text,\n                        start=w.start + chunk_start,\n                        end=w.end + chunk_start,\n                    ))\n\n                # Remove overlap duplicates: if this chunk overlaps with previous,\n                # drop words from the beginning that are too close to previous end\n                if i \u003e 0 and all_words:\n                    cutoff = start_sec - overlap_sec * 0.5\n                    all_words = [w for w in all_words if w.start \u003e= cutoff or len(all_words) \u003c= 2]",
+      "start_line": 256,
+      "end_line": 268,
+      "category": "bug",
+      "severity": "critical"
+    }
+  ],
+  "session_id": "7e42892d-56a4-4fae-90e3-68e43c3095a2"
+}

@@ -55,9 +55,15 @@ def short_audio_path():
     if not audio_bytes:
         pytest.skip("Could not extract audio from dataset")
 
-    # Write to WAV
+    # Write to WAV atomically (temp file + rename)
     import io
     data, sr = sf.read(io.BytesIO(audio_bytes))
-    sf.write(str(cached_file), data, sr)
+    temp_file = cache_dir / "podlodka_speech_sample_0.tmp.wav"
+    try:
+        sf.write(str(temp_file), data, sr)
+        temp_file.replace(cached_file)
+    finally:
+        if temp_file.exists():
+            temp_file.unlink()
 
     return str(cached_file)
