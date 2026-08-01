@@ -47,17 +47,22 @@ def detect_speech_segments(
     Returns list of (start_sec, end_sec) tuples grouped into windows
     of max_segment_sec length, split at silence boundaries.
     """
+    import warnings
+
     from silero_vad import get_speech_timestamps, load_silero_vad
 
     vad = load_silero_vad()
     audio_t = torch.from_numpy(audio)
-    timestamps = get_speech_timestamps(
-        audio_t,
-        vad,
-        sampling_rate=sr,
-        min_silence_duration_ms=min_silence_ms,
-        min_speech_duration_ms=min_speech_ms,
-    )
+    # silero_vad warns when downsampling >16kHz audio; this is expected
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        timestamps = get_speech_timestamps(
+            audio_t,
+            vad,
+            sampling_rate=sr,
+            min_silence_duration_ms=min_silence_ms,
+            min_speech_duration_ms=min_speech_ms,
+        )
 
     # Convert sample indices to seconds
     speech = [(t["start"] / sr, t["end"] / sr) for t in timestamps]

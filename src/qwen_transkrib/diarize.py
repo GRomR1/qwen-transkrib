@@ -8,7 +8,28 @@ from pathlib import Path
 import pandas as pd
 import soundfile as sf
 import torch
+import torchaudio.functional as _ta_func
 from pyannote.audio import Pipeline
+
+# Monkey-patch: torchaudio is a stub on MetaX GPUs, so we provide a
+# working resample via linear interpolation.
+if not hasattr(_ta_func, "resample") or not callable(getattr(_ta_func, "resample", None)):
+
+    def _resample(waveform: torch.Tensor, orig_freq: int, new_freq: int) -> torch.Tensor:
+        if orig_freq == new_freq:
+            return waveform
+        new_length = int(waveform.shape[-1] * new_freq / orig_freq)
+        # interpolate expects (batch, length) or (batch, channels, length)
+        unsqueezed = waveform.unsqueeze(0) if waveform.dim() < 3 else waveform
+        resampled = torch.nn.functional.interpolate(
+            unsqueezed.float(),
+            size=new_length,
+            mode="linear",
+            align_corners=False,
+        )
+        return resampled.squeeze(0) if waveform.dim() < 3 else resampled
+
+    _ta_func.resample = _resample  # type: ignore[attr-defined]
 
 from qwen_transkrib.config import Settings
 from qwen_transkrib.errors import DiarizationError
