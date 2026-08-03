@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -166,6 +167,8 @@ class GigaAMBackend(ASRBackend):
         prev_text = ""
         overlap_sec = self.DEFAULT_OVERLAP_SEC
 
+        logger.info("Transcribing %d VAD chunks (HF path)...", len(windows))
+        _t0 = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="gigaam_vad_") as tmpdir:
             for i, (start_sec, end_sec) in enumerate(windows):
                 # Add overlap at the start (from previous chunk)
@@ -184,6 +187,11 @@ class GigaAMBackend(ASRBackend):
                 # words that duplicate the end of the previous chunk
                 if i > 0 and prev_text:
                     chunk_text = _strip_overlap(prev_text, chunk_text)
+
+                logger.info(
+                    "  chunk %d/%d done (%.1f min elapsed)",
+                    i + 1, len(windows), (time.monotonic() - _t0) / 60,
+                )
 
                 texts.append(chunk_text)
                 prev_text = chunk_text[-200:]  # carry over last 200 chars
@@ -232,6 +240,11 @@ class GigaAMBackend(ASRBackend):
 
         import soundfile as sf
 
+        logger.info(
+            "Transcribing %d VAD chunks (%.1f min audio, overlap %.1f s)...",
+            len(windows), duration / 60, overlap_sec,
+        )
+        _t0 = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="gigaam_vad_") as tmpdir:
             for i, (start_sec, end_sec) in enumerate(windows):
                 # Add overlap at the start (from previous chunk)
@@ -252,6 +265,11 @@ class GigaAMBackend(ASRBackend):
                     words, text = self._native_words(model, chunk_path)
                 except ImportError:
                     words, text = self._hf_words(chunk_path, chunk_audio, sr, chunk_dur, prev_text)
+
+                logger.info(
+                    "  chunk %d/%d done (%.0f s, %.1f min elapsed)",
+                    i + 1, len(windows), chunk_dur, (time.monotonic() - _t0) / 60,
+                )
 
                 # Filter overlap duplicates BEFORE adding to global list.
                 # Only drop words from the beginning of this chunk that
@@ -288,6 +306,8 @@ class GigaAMBackend(ASRBackend):
 
         import soundfile as sf
 
+        logger.info("VAD found no segments; falling back to fixed %ds chunking", self.MAX_SHORT_SEC)
+        _t0 = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="gigaam_fixed_") as tmpdir:
             while start < len(audio):
                 end = min(start + max_samp, len(audio))
@@ -301,6 +321,11 @@ class GigaAMBackend(ASRBackend):
                 except ImportError:
                     chunk_dur = len(chunk) / sr
                     words, text = self._hf_words(chunk_path, chunk, sr, chunk_dur, prev_text)
+
+                logger.info(
+                    "  chunk %.0f/%.0f s done (%.1f min elapsed)",
+                    start / sr, len(audio) / sr, (time.monotonic() - _t0) / 60,
+                )
 
                 for w in words:
                     all_words.append(Word(
@@ -367,6 +392,8 @@ class GigaAMBackend(ASRBackend):
         import soundfile as sf
         texts: list[str] = []
 
+        logger.info("Transcribing %d VAD chunks (native path)...", len(windows))
+        _t0 = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="gigaam_native_") as tmpdir:
             for i, (start_sec, end_sec) in enumerate(windows):
                 start_samp = int(start_sec * sr)
@@ -377,6 +404,10 @@ class GigaAMBackend(ASRBackend):
 
                 r = model.transcribe(chunk_path)
                 texts.append(r.text if hasattr(r, 'text') else r)
+                logger.info(
+                    "  chunk %d/%d done (%.1f min elapsed)",
+                    i + 1, len(windows), (time.monotonic() - _t0) / 60,
+                )
 
         return " ".join(texts)
 
@@ -408,6 +439,8 @@ class GigaAMBackend(ASRBackend):
         else:
             texts: list[str] = []
             start = 0
+            logger.info("Transcribing %s with fixed %ds chunks (HF path)...", path, 25)
+            _t0 = time.monotonic()
             with tempfile.TemporaryDirectory(prefix="gigaam_") as tmpdir:
                 while start < len(audio):
                     end = min(start + max_samples, len(audio))
@@ -416,6 +449,10 @@ class GigaAMBackend(ASRBackend):
                     import soundfile as sf
                     sf.write(chunk_path, chunk, sr)
                     texts.append(self._hf_model.transcribe(chunk_path))
+                    logger.info(
+                        "  chunk %.0f/%.0f s done (%.1f min elapsed)",
+                        start / sr, len(audio) / sr, (time.monotonic() - _t0) / 60,
+                    )
                     if end >= len(audio):
                         break
                     start += max_samples - int(0.5 * sr)

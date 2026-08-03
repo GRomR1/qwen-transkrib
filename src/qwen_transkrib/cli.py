@@ -19,6 +19,9 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 # Set root logger to WARNING to suppress all INFO/WARNING from libraries
 logging.getLogger().setLevel(logging.WARNING)
 
+# Show our own progress logs (VAD, chunk progress) while keeping libraries quiet
+logging.getLogger("qwen_transkrib").setLevel(logging.INFO)
+
 # Set specific loggers to WARNING
 for name in ("vllm", "transformers", "transformers.generation", "transformers.generation.utils"):
     logging.getLogger(name).setLevel(logging.ERROR)
