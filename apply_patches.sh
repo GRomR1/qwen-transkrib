@@ -40,18 +40,9 @@ fi
 # Patch 3: pyannote io.py — suppress noisy torchcodec warning (noisy on MetaX, harmless)
 PYANNOTE_IO="$VENV_DIR/lib/python3.12/site-packages/pyannote/audio/core/io.py"
 if [ -f "$PYANNOTE_IO" ]; then
-    if grep -q 'TORCHCODEC_AVAILABLE = False' "$PYANNOTE_IO" && grep -q 'warnings.warn' "$PYANNOTE_IO"; then
-        echo "  Patching pyannote io.py (suppress torchcodec warning) ..."
-        sed -i '/^except Exception as e:$/,/^    AudioStreamMetadata = None$/{
-            /^    warnings.warn(/,/}$/d
-            s/^except Exception as e:/except Exception:/
-            a\    # torchcodec unavailable — pyannote falls back to torchaudio automatically.\
-            # Warning suppressed to avoid noisy logs on MetaX GPUs without FFmpeg.
-        }' "$PYANNOTE_IO"
-        echo "  Done."
-    else
-        echo "  pyannote io.py already patched or not found, skipping."
-    fi
+    echo "  Patching pyannote io.py (suppress torchcodec warning) ..."
+    python3 "$SCRIPT_DIR/patches/apply_pyannote_io_patch.py" "$PYANNOTE_IO" || true
+    echo "  Done."
 else
     echo "  Warning: $PYANNOTE_IO not found, skipping."
 fi

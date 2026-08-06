@@ -52,6 +52,8 @@ Thumbs.db
 # Model cache
 models/
 data/
+# ...but not the torchaudio-stub source submodule (a real package dir, not a cache)
+!packages/torchaudio-stub/src/torchaudio/models/
 
 # Output
 out/

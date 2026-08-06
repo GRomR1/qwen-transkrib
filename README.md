@@ -30,6 +30,21 @@ uv sync
 ./apply_patches.sh  # Apply MetaX-specific patches
 ```
 
+### MetaX GPU
+
+On MetaX (MACA) GPUs, PyTorch links against `libmctlassEx.so` from the MACA SDK,
+which `uv sync` does **not** install. Install it via apt before running — the
+version must match your installed MACA SDK (`3.8.1.3` for the C550):
+
+```bash
+sudo apt-get install -y mctlassex_3.8.1=3.8.1.3
+```
+
+Without it, `import torch` fails with
+`ImportError: libmctlassEx.so: cannot open shared object file`. Note that the
+similarly named `mctlass_3.8.1` package is **headers-only** and does not provide
+this library.
+
 ### pip
 
 ```bash
