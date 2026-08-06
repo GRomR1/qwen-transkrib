@@ -51,6 +51,7 @@ def detect_speech_segments(
 
     from silero_vad import get_speech_timestamps, load_silero_vad
 
+    logger.info("Running Silero VAD on %.1f s audio...", len(audio) / sr)
     vad = load_silero_vad()
     audio_t = torch.from_numpy(audio)
     # silero_vad warns when downsampling >16kHz audio; this is expected
@@ -93,6 +94,11 @@ def detect_speech_segments(
             start = mid
         split_windows.append((start, end))
 
+    logger.info(
+        "VAD done: %d speech windows, %.1f min of speech",
+        len(split_windows),
+        (split_windows[-1][1] - split_windows[0][0]) / 60 if split_windows else 0.0,
+    )
     return split_windows
 
 
